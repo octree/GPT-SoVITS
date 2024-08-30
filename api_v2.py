@@ -23,8 +23,8 @@ POST:
 {
     "text": "",                   # str.(required) text to be synthesized
     "text_lang: "",               # str.(required) language of the text to be synthesized
-    "ref_audio_path": "",         # str.(required) reference audio path
-    "aux_ref_audio_paths": [],    # list.(optional) auxiliary reference audio paths for multi-speaker tone fusion
+    "speaker": "",                # str.(required) the speacker id
+    "emotion": "",                # str.(required) the emotion id
     "prompt_text": "",            # str.(optional) prompt text for the reference audio
     "prompt_lang": "",            # str.(required) language of the prompt text for the reference audio
     "top_k": 5,                   # int. top k sampling
@@ -98,7 +98,10 @@ RESP:
 import os
 import sys
 import traceback
+import random
+from pathlib import Path
 from typing import Generator
+import struct
 
 now_dir = os.getcwd()
 sys.path.append(now_dir)
@@ -120,6 +123,8 @@ from GPT_SoVITS.TTS_infer_pack.TTS import TTS, TTS_Config
 from GPT_SoVITS.TTS_infer_pack.text_segmentation_method import get_method_names as get_cut_method_names
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+import json
+
 # print(sys.path)
 i18n = I18nAuto()
 cut_method_names = get_cut_method_names()
@@ -148,6 +153,8 @@ class TTS_Request(BaseModel):
     text_lang: str = None
     ref_audio_path: str = None
     aux_ref_audio_paths: list = None
+    speaker: str = None,
+    emotion: str = None,
     prompt_lang: str = None
     prompt_text: str = ""
     top_k:int = 5
@@ -165,16 +172,50 @@ class TTS_Request(BaseModel):
     parallel_infer:bool = True
     repetition_penalty:float = 1.35
 
+def load_json(json_file):
+    if not json_file:
+        print(" ===== Not using a json file")
+        return None
+    try:
+        with open(json_file, "r", encoding="utf-8") as file:
+            data = json.load(file)
+    except FileNotFoundError:
+        print(f" ===== ref json not found: {json_file}")
+        data = None
+    except Exception as e:
+        data = None
+    return data
+
+def get_random_paths(base_path, data, speaker, emotion):
+    if base_path and data and speaker and emotion and (Path(base_path).exists()):
+        if speaker in data and emotion in data[speaker]:
+            files = data[speaker][emotion]
+            lab_files = [f for f in files if f.endswith(".lab")]
+            wav_files = [f for f in files if f.endswith(".wav")]
+
+            if lab_files and wav_files:
+                selected_lab = random.choice(lab_files)
+                selected_wav = random.choice(wav_files)
+
+                lab_path = Path(base_path) / speaker / emotion / selected_lab
+                wav_path = Path(base_path) / speaker / emotion / selected_wav
+                if lab_path.exists() and wav_path.exists():
+                    return lab_path, wav_path
+
+    return None, None
+
 ### modify from https://github.com/RVC-Boss/GPT-SoVITS/pull/894/files
 def pack_ogg(io_buffer:BytesIO, data:np.ndarray, rate:int):
     with sf.SoundFile(io_buffer, mode='w', samplerate=rate, channels=1, format='ogg') as audio_file:
         audio_file.write(data)
     return io_buffer
 
-
 def pack_raw(io_buffer:BytesIO, data:np.ndarray, rate:int):
     io_buffer.write(data.tobytes())
     return io_buffer
+    # sf.write(io_buffer, data, rate, format='wav')
+    # io_buffer.seek(44)
+    # return BytesIO(io_buffer.read())
 
 
 def pack_wav(io_buffer:BytesIO, data:np.ndarray, rate:int):
@@ -225,6 +266,8 @@ def wave_header_chunk(frame_input=b"", channels=1, sample_width=2, sample_rate=3
         vfout.setframerate(sample_rate)
         vfout.writeframes(frame_input)
 
+    wav_buf.seek(40) 
+    wav_buf.write(struct.pack('>I', 0xefffffff))
     wav_buf.seek(0)
     return wav_buf.read()
 
@@ -246,8 +289,6 @@ def check_params(req:dict):
     prompt_lang:str = req.get("prompt_lang", "")
     text_split_method:str = req.get("text_split_method", "cut5")
 
-    if ref_audio_path in [None, ""]:
-        return JSONResponse(status_code=400, content={"message": "ref_audio_path is required"})
     if text in [None, ""]:
         return JSONResponse(status_code=400, content={"message": "text is required"})
     if (text_lang in [None, ""]) :
@@ -277,8 +318,8 @@ async def tts_handle(req:dict):
             {
                 "text": "",                   # str.(required) text to be synthesized
                 "text_lang: "",               # str.(required) language of the text to be synthesized
-                "ref_audio_path": "",         # str.(required) reference audio path
-                "aux_ref_audio_paths": [],    # list.(optional) auxiliary reference audio paths for multi-speaker synthesis
+                "speaker": "",                # str.(required) the speacker id
+                "emotion": "",                # str.(required) the emotion id       
                 "prompt_text": "",            # str.(optional) prompt text for the reference audio
                 "prompt_lang": "",            # str.(required) language of the prompt text for the reference audio
                 "top_k": 5,                   # int. top k sampling
@@ -303,6 +344,17 @@ async def tts_handle(req:dict):
     streaming_mode = req.get("streaming_mode", False)
     return_fragment = req.get("return_fragment", False)
     media_type = req.get("media_type", "wav")
+    speaker = req.get("speacker", "girl2")
+    emotion = req.get("emotion", "normal")
+    
+    lab_path, wav_path = get_random_paths('ref_data', load_json('ref_data.json'), speaker, emotion)
+    print(' ====== The Audio Path  ' + str(wav_path) + "  " + str(emotion))
+    if lab_path and wav_path:
+        with open(lab_path, "r", encoding="utf-8") as lab_file:
+            ref_text = lab_file.read()
+            print(f"===== REF: {ref_text}")
+    req["ref_audio_path"] = str(wav_path)
+    req["prompt_text"] = ref_text
 
     check_res = check_params(req)
     if check_res is not None:
@@ -317,12 +369,13 @@ async def tts_handle(req:dict):
         if streaming_mode:
             def streaming_generator(tts_generator:Generator, media_type:str):
                 if media_type == "wav":
-                    yield wave_header_chunk()
+                    wavheader = wave_header_chunk()
+                    yield wavheader
                     media_type = "raw"
                 for sr, chunk in tts_generator:
                     yield pack_audio(BytesIO(), chunk, sr, media_type).getvalue()
             # _media_type = f"audio/{media_type}" if not (streaming_mode and media_type in ["wav", "raw"]) else f"audio/x-{media_type}"
-            return StreamingResponse(streaming_generator(tts_generator, media_type, ), media_type=f"audio/{media_type}")
+            return StreamingResponse(streaming_generator(tts_generator, media_type, ), media_type=f"audio/wav")
     
         else:
             sr, audio_data = next(tts_generator)
@@ -348,6 +401,8 @@ async def control(command: str = None):
 async def tts_get_endpoint(
                         text: str = None,
                         text_lang: str = None,
+                        speaker: str = None,
+                        emotion: str = None,
                         ref_audio_path: str = None,
                         aux_ref_audio_paths:list = None,
                         prompt_lang: str = None,
@@ -367,9 +422,12 @@ async def tts_get_endpoint(
                         parallel_infer:bool = True,
                         repetition_penalty:float = 1.35
                         ):
+    print("======= GET")
     req = {
         "text": text,
         "text_lang": text_lang.lower(),
+        "speaker": speaker,
+        "emotion": emotion,
         "ref_audio_path": ref_audio_path,
         "aux_ref_audio_paths": aux_ref_audio_paths,
         "prompt_text": prompt_text,
