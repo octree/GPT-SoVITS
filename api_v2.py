@@ -174,7 +174,6 @@ class TTS_Request(BaseModel):
 
 def load_json(json_file):
     if not json_file:
-        print(" ===== Not using a json file")
         return None
     try:
         with open(json_file, "r", encoding="utf-8") as file:
@@ -348,11 +347,9 @@ async def tts_handle(req:dict):
     emotion = req.get("emotion", "normal")
     
     lab_path, wav_path = get_random_paths('ref_data', load_json('ref_data.json'), speaker, emotion)
-    print(' ====== The Audio Path  ' + str(wav_path) + "  " + str(emotion))
     if lab_path and wav_path:
         with open(lab_path, "r", encoding="utf-8") as lab_file:
             ref_text = lab_file.read()
-            print(f"===== REF: {ref_text}")
     req["ref_audio_path"] = str(wav_path)
     req["prompt_text"] = ref_text
 
@@ -422,7 +419,6 @@ async def tts_get_endpoint(
                         parallel_infer:bool = True,
                         repetition_penalty:float = 1.35
                         ):
-    print("======= GET")
     req = {
         "text": text,
         "text_lang": text_lang.lower(),
