@@ -23,7 +23,7 @@ POST:
 {
     "text": "",                   # str.(required) text to be synthesized
     "text_lang: "",               # str.(required) language of the text to be synthesized
-    "speaker": "",                # str.(required) the speacker id
+    "speaker": "",                # str.(required) the speaker id
     "emotion": "",                # str.(required) the emotion id
     "prompt_text": "",            # str.(optional) prompt text for the reference audio
     "prompt_lang": "",            # str.(required) language of the prompt text for the reference audio
@@ -317,7 +317,7 @@ async def tts_handle(req:dict):
             {
                 "text": "",                   # str.(required) text to be synthesized
                 "text_lang: "",               # str.(required) language of the text to be synthesized
-                "speaker": "",                # str.(required) the speacker id
+                "speaker": "",                # str.(required) the speaker id
                 "emotion": "",                # str.(required) the emotion id       
                 "prompt_text": "",            # str.(optional) prompt text for the reference audio
                 "prompt_lang": "",            # str.(required) language of the prompt text for the reference audio
@@ -343,13 +343,13 @@ async def tts_handle(req:dict):
     streaming_mode = req.get("streaming_mode", False)
     return_fragment = req.get("return_fragment", False)
     media_type = req.get("media_type", "wav")
-    speaker = req.get("speacker", "girl2")
-    emotion = req.get("emotion", "normal")
+    speaker = req.get("speaker", "U")
+    emotion = req.get("emotion", "Normal")
     
     lab_path, wav_path = get_random_paths('ref_data', load_json('ref_data.json'), speaker, emotion)
     if lab_path and wav_path:
         with open(lab_path, "r", encoding="utf-8") as lab_file:
-            ref_text = lab_file.read()
+            [ref_text] = lab_file.read()
     req["ref_audio_path"] = str(wav_path)
     req["prompt_text"] = ref_text
 
